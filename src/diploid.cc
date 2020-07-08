@@ -2,6 +2,7 @@
 #include <math.h>
 #include <assert.h>
 #include <sstream>
+#include <iostream>
 #include "diploid.h"
 using namespace std;
 
@@ -112,7 +113,9 @@ GLnexus::Status bcf_get_genotype_log_likelihoods(const bcf_hdr_t* header, bcf1_t
 
     // try loading genotype likelihoods from PL
     htsvecbox<int32_t> igl;
+    cerr << "bcf_get_genotype_log_likelihoods\n";
     if (bcf_get_format_int32(header, record, "PL", &igl.v, &igl.capacity) == record->n_sample*nGT) {
+        cerr << "num PL records: " << record->n_sample*nGT << "; capacity: " << igl.capacity << "\n";
         for (unsigned ik = 0; ik < record->n_sample*nGT; ik++) {
             auto x = igl[ik];
             if (x == bcf_int32_missing || x == bcf_int32_vector_end) {
@@ -125,6 +128,7 @@ GLnexus::Status bcf_get_genotype_log_likelihoods(const bcf_hdr_t* header, bcf1_t
         }
         return Status::OK();
     }
+    cerr << "outside of if. Num PL records: " << record->n_sample*nGT << "; capacity: " << igl.capacity << "\n";
 /*
     // couldn't load PL; try GL
     htsvecbox<float> fgl;

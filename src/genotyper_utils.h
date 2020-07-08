@@ -1,3 +1,5 @@
+#include <iostream>
+using namespace std;
 // Helper classes/functions for the genotyper algorithm (included only by genotyper.cc)
 namespace GLnexus {
 
@@ -943,7 +945,9 @@ Status update_format_fields(const genotyper_config& cfg, const string& dataset, 
         if (squeeze && format_helper->field_info.name != "DP") {
             // squeeze: censor all fields but DP
             for (const auto& p : sample_mapping) {
+                cerr << "before censor\n";
                 S(format_helper->censor(p.second, false));
+                cerr << "after censor\n";
             }
             continue;
         }
@@ -958,11 +962,13 @@ Status update_format_fields(const genotyper_config& cfg, const string& dataset, 
         }
 
         for (const auto& record : *records_to_use) {
+            cerr << "before add_record_data\n";
             s = format_helper->add_record_data(dataset, dataset_header, record->p.get(),
                                                sample_mapping, record->allele_mapping, site.alleles.size());
             if (s.bad() && s != StatusCode::NOT_FOUND) {
                 return s;
             }
+            cerr << "after add_record_data\n";
         }
 
         if (squeeze) {
