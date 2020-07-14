@@ -51,6 +51,7 @@ ExternalProject_Add(htslib
     INSTALL_COMMAND ""
     LOG_DOWNLOAD ON
     LOG_BUILD ON
+    BUILD_ALWAYS 1
   )
 ExternalProject_Get_Property(htslib source_dir)
 set(HTSLIB_INCLUDE_DIR ${source_dir}/htslib)

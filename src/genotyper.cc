@@ -33,101 +33,24 @@ static inline bool is_deletion(const string& ref, const string& alt) {
     return true;
 }
 
-Status bcf_haploid_to_diploid(const bcf_hdr_t *header, bcf1_t *record) {
-    assert(record->n_sample == 1);
-    // assert(nGT == 1);
-    
-    // char *err_msg;
-    int nret;
-    int num_alleles = record->n_allele;
-    int num_genotypes = num_alleles*(num_alleles + 1)/2;
 
-    for (int i = 0; i < record->n_info; i++) {
-        bcf_info_t *info = &record->d.info[i];
-        int vlen = bcf_hdr_id2length(header,BCF_HL_INFO,info->key);
+// Status update_haploid_to_diploid(const shared_ptr<bcf1_t>& record, bcf1_t_plus& ans) {
 
-        if ( vlen!=BCF_VL_G) continue; // no need to change
+//     // auto record = shared_ptr<bcf1_t>(bcf_dup(ans.p.get()), &bcf_destroy);
+//     // ans.p = record;
 
-        int type = bcf_hdr_id2type(header,BCF_HL_INFO,info->key);
-        if ( !( type==BCF_HT_REAL || type==BCF_HT_INT ) ) continue;
-
-
-        uint8_t *dat = NULL;
-        int mdat;
-        nret = bcf_get_info_values(header, record, bcf_hdr_int2id(header,BCF_DT_ID,info->key), (void**)&dat, &mdat, type);
-        if ( nret<0 ) {
-            // sprintf(err_msg, "Could not access INFO/%s at %s:%d [%d]",
-            //     bcf_hdr_int2id(header,BCF_DT_ID,info->key), bcf_seqname(header,record), record->pos+1, nret);
-            // return Status::Failure(err_msg);
-            return Status::Failure("Could not access INFO");
-        }
-
-        vector<int32_t> vals_int32;
-        vector<float> vals_float;
-        switch (type) {
-            case BCF_HT_INT:
-                vals_int32.resize(num_genotypes);
-                for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {
-                    int pseudodiploid_allele_idx = bcf_alleles2gt(bcf_gt_missing, allele_idx);
-                    vals_int32[pseudodiploid_allele_idx] = *((int32_t*)(mdat + sizeof(int32_t) * allele_idx));
-                }
-                for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {
-                    for (int allele_2_idx = 0; allele_2_idx < num_alleles; ++allele_2_idx) {
-                        int pseudodiploid_allele_idx = bcf_alleles2gt(allele_2_idx, allele_idx);
-                        vals_int32[pseudodiploid_allele_idx] = bcf_int32_missing;
-                    }
-                }
-                nret = bcf_update_info(header, record, bcf_hdr_int2id(header, BCF_DT_ID, info->key), vals_int32.data(), vals_int32.size(), type);
-                if (nret < 0) {
-                    // sprintf(err_msg, "Could not update INFO/%s at %s:%d [%d]",
-                    //     bcf_hdr_int2id(header,BCF_DT_ID,info->key), bcf_seqname(header,record), record->pos+1, nret);
-                    // return Status::Failure(err_msg);
-                    return Status::Failure("Could not access INFO");
-                }
-                break;
-            case BCF_HT_REAL:
-                vals_float.resize(num_genotypes);
-                for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {
-                    int pseudodiploid_allele_idx = bcf_alleles2gt(bcf_gt_missing, allele_idx);
-                    vals_float[pseudodiploid_allele_idx] = *((float*)(mdat + sizeof(float) * allele_idx));
-                }
-                for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {
-                    for (int allele_2_idx = 0; allele_2_idx < num_alleles; ++allele_2_idx) {
-                        int pseudodiploid_allele_idx = bcf_alleles2gt(allele_2_idx, allele_idx);
-                        vals_float[pseudodiploid_allele_idx] = bcf_float_missing;
-                    }
-                }
-                nret = bcf_update_info(header, record, bcf_hdr_int2id(header, BCF_DT_ID, info->key), vals_float.data(), vals_float.size(), type);
-                if (nret < 0) {
-                    // sprintf(err_msg, "Could not update INFO/%s at %s:%d [%d]",
-                    //     bcf_hdr_int2id(header,BCF_DT_ID,info->key), bcf_seqname(header,record), record->pos+1, nret);
-                    // return Status::Failure(err_msg);
-                    return Status::Failure("Could not access INFO");
-                }
-                break;            
-        }
-    }
-
-    return Status::OK();
-}
-
-Status update_haploid_to_diploid(const shared_ptr<bcf1_t>& record, bcf1_t_plus& ans) {
-
-    // auto record = shared_ptr<bcf1_t>(bcf_dup(ans.p.get()), &bcf_destroy);
-    // ans.p = record;
-
-    // ans.gt.v = (int*) realloc(ans.gt.v, 2*sizeof(int));
-    // ans.gt.capacity = 2;
-    // swap(ans.gt[0], ans.gt[1]);
-    // ans.gt[0] = bcf_gt_missing;
-    // assert(bcf_gt_is_missing(ans.gt[0]));
-    // ans.was_haploid = true;
-    // if (bcf_update_genotypes(hdr, record.get(), ans.gt.v, 2*record->n_sample)) {
-    //     return Status::Failure("genotyper::preprocess_record: bcf_update_genotypes failed");
-    // }
-    // // auto nGT_after = bcf_get_genotypes(hdr, record.get(), &ans.gt.v, &ans.gt.capacity);
-    return Status::OK();
-}
+//     // ans.gt.v = (int*) realloc(ans.gt.v, 2*sizeof(int));
+//     // ans.gt.capacity = 2;
+//     // swap(ans.gt[0], ans.gt[1]);
+//     // ans.gt[0] = bcf_gt_missing;
+//     // assert(bcf_gt_is_missing(ans.gt[0]));
+//     // ans.was_haploid = true;
+//     // if (bcf_update_genotypes(hdr, record.get(), ans.gt.v, 2*record->n_sample)) {
+//     //     return Status::Failure("genotyper::preprocess_record: bcf_update_genotypes failed");
+//     // }
+//     // // auto nGT_after = bcf_get_genotypes(hdr, record.get(), &ans.gt.v, &ans.gt.capacity);
+//     return Status::OK();
+// }
 
 // Pre-process a bcf1_t record to cache some useful info that we'll use repeatedly
  Status preprocess_record(const unified_site& site, const bcf_hdr_t* hdr, const shared_ptr<bcf1_t>& record,
@@ -151,7 +74,9 @@ Status update_haploid_to_diploid(const shared_ptr<bcf1_t>& record, bcf1_t_plus& 
         assert(bcf_gt_is_missing(ans.gt[0]));
         ans.was_haploid = true;
         // update_haploid_to_diploid(record, ans);
-        bcf_haploid_to_diploid(hdr, record.get());
+        // bcf_haploid_to_diploid(hdr, record.get());
+        HaploidToDiploidTransformer transformer;
+        transformer.transform(hdr, record.get());
     } else if(nGT != 2*record->n_sample || !ans.gt.v) {
         return Status::Failure("genotyper::preprocess_record: unexpected result from bcf_get_genotypes");
     }
@@ -197,8 +122,8 @@ Status revise_genotypes(const genotyper_config& cfg, const unified_site& us,
                         const bcf_hdr_t* hdr, bcf1_t_plus& vr) {
     assert(!vr.is_ref);
     // At a moment we don't revise haploid genotypes 
-    if (vr.was_haploid)
-        return Status::OK();
+    // if (vr.was_haploid)
+    //     return Status::OK();
 
     // Speed optimization: our prior on genotypes will be effectively flat
     // if there are no lost ALT alleles or homozygous-ALT genotypes called, so
@@ -419,6 +344,7 @@ Status prepare_dataset_records(const genotyper_config& cfg, const unified_site& 
     if (variant_records.empty() || !cfg.allow_partial_data) {
         for (const auto& rp : all_records) {
             if (rp->is_ref && !rp->was_haploid) {
+                cerr << "ToDo: convert back diploid --> haploid\n";
                 for (unsigned i = 0; i < 2*rp->p->n_sample; i++) {
                     if (bcf_gt_is_missing(rp->gt[i]) || bcf_gt_allele(rp->gt[i]) != 0) {
                         rnc = NoCallReason::InputNonCalled;
@@ -848,11 +774,9 @@ Status genotype_site(const genotyper_config& cfg, MetadataCache& cache, BCFData&
         vector<int> min_ref_depth(samples.size(), -1);
         vector<shared_ptr<bcf1_t_plus>> all_records, variant_records, variant_records_used;
         NoCallReason rnc = NoCallReason::MissingData;
-        cerr << "before prepare_dataset_records\n";
         S(prepare_dataset_records(cfg, site, dataset, dataset_header.get(), bcf_nsamples,
                                   sample_mapping, records, *adh, rnc, min_ref_depth,
                                   all_records, variant_records));
-        cerr << "after prepare_dataset_records\n";
 
         if (rnc != NoCallReason::N_A) {
             // no call for the samples in this dataset (several possible
