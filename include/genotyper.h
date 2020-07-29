@@ -36,6 +36,7 @@ enum class NoCallReason {
     OverlappingVariants,  /// site spans multiple variants which overlap each other
     MonoallelicSite,      /// site is monoallelic; no assertion about the presence of either ref or alt allele
     InputNonCalled,       /// the relevant input gVCF record is itself non-called
+    HomologueForHaploid,  /// haploid site was called; this call is related to a non-existent homologous chromosome
 };
 
 /// A single allele call and metadata; diploid samples each have two calls
@@ -85,7 +86,7 @@ struct bcf1_t_plus {
 
     // True if the original record was 'haploid' (e.g. GT=0 or GT=1) as seen
     // with some gVCF callers like Strelka2.
-    // In preprocessing, we rewrite gt to loook like ./0 or ./1 for simpler
+    // In preprocessing, we rewrite gt to look like ./0 or ./1 for simpler
     // treatment subsequently, but note the original form here.
     bool was_haploid = false;
 };

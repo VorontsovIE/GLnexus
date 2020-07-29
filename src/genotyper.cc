@@ -33,24 +33,7 @@ static inline bool is_deletion(const string& ref, const string& alt) {
     return true;
 }
 
-
-// Status update_haploid_to_diploid(const shared_ptr<bcf1_t>& record, bcf1_t_plus& ans) {
-
-//     // auto record = shared_ptr<bcf1_t>(bcf_dup(ans.p.get()), &bcf_destroy);
-//     // ans.p = record;
-
-//     // ans.gt.v = (int*) realloc(ans.gt.v, 2*sizeof(int));
-//     // ans.gt.capacity = 2;
-//     // swap(ans.gt[0], ans.gt[1]);
-//     // ans.gt[0] = bcf_gt_missing;
-//     // assert(bcf_gt_is_missing(ans.gt[0]));
-//     // ans.was_haploid = true;
-//     // if (bcf_update_genotypes(hdr, record.get(), ans.gt.v, 2*record->n_sample)) {
-//     //     return Status::Failure("genotyper::preprocess_record: bcf_update_genotypes failed");
-//     // }
-//     // // auto nGT_after = bcf_get_genotypes(hdr, record.get(), &ans.gt.v, &ans.gt.capacity);
-//     return Status::OK();
-// }
+static HaploidToDiploidTransformer haploid_diploid_transformer;
 
 // Pre-process a bcf1_t record to cache some useful info that we'll use repeatedly
  Status preprocess_record(const unified_site& site, const bcf_hdr_t* hdr, const shared_ptr<bcf1_t>& record,
@@ -73,10 +56,9 @@ static inline bool is_deletion(const string& ref, const string& alt) {
         ans.gt[0] = bcf_gt_missing;
         assert(bcf_gt_is_missing(ans.gt[0]));
         ans.was_haploid = true;
-        // update_haploid_to_diploid(record, ans);
-        // bcf_haploid_to_diploid(hdr, record.get());
-        HaploidToDiploidTransformer transformer;
-        transformer.transform(hdr, record.get());
+        haploid_diploid_transformer.transform(hdr, record.get());
+        cerr << "pos:" << record->pos << endl;
+        cerr << "gt: " << ans.gt[0] << ans.gt[1] << endl;
     } else if(nGT != 2*record->n_sample || !ans.gt.v) {
         return Status::Failure("genotyper::preprocess_record: unexpected result from bcf_get_genotypes");
     }
@@ -121,6 +103,11 @@ Status revise_genotypes(const genotyper_config& cfg, const unified_site& us,
                         const map<int, int>& sample_mapping,
                         const bcf_hdr_t* hdr, bcf1_t_plus& vr) {
     assert(!vr.is_ref);
+    cerr << "revise_genotypes:sample_mapping: " << sample_mapping.size() << "\n";
+    // cerr << "gt before revise: ";
+    // for (int el_idx = 0; el_idx < vr.gt.capacity; ++el_idx) cerr << vr.gt[el_idx] << " ";
+    // cerr << endl;
+        
     // At a moment we don't revise haploid genotypes 
     // if (vr.was_haploid)
     //     return Status::OK();
@@ -154,6 +141,7 @@ Status revise_genotypes(const genotyper_config& cfg, const unified_site& us,
     if (!needs_revision) {
         // return Status::OK();
     }
+    cerr << "ToDo: Rollback skipping revision\n";
 
     // start by replacing the record with a duplicate, since it may not be safe to
     // mutate the "original"
@@ -166,7 +154,6 @@ Status revise_genotypes(const genotyper_config& cfg, const unified_site& us,
     // extract input genotype likelihoods and GQ
     vector<double> gll;
     Status s = diploid::bcf_get_genotype_log_likelihoods(hdr, record.get(), gll);
-    cerr << "s.ok(): " << s.ok() << "; s " << s.str() << "\n";
     if (!s.ok()) {
         return Status::Failure("genotyper::revise_genotypes: couldn't find genotype likelihoods in gVCF record", s.str());
     }
@@ -209,15 +196,28 @@ Status revise_genotypes(const genotyper_config& cfg, const unified_site& us,
             } else if (g_ll > silver_gll) {
                 silver_gll = g_ll;
             }
+            cerr << "g:" << g << "; gll: " << g_ll << "; map_gll: " << map_gll << "; silver_gll: " << silver_gll << "; map_gt: " << map_gt << "\n";
         }
         assert(map_gt >= 0 && map_gt < nGT);
         assert(map_gll >= silver_gll);
         assert(silver_gll > log(0));
 
         // record MAP genotype and recalculate GQ
-        const auto revised_alleles = diploid::gt_alleles(map_gt);
-        vr.gt.v[sample.first*2] = bcf_gt_unphased(revised_alleles.first);
-        vr.gt.v[sample.first*2+1] = bcf_gt_unphased(revised_alleles.second);
+        if (!vr.was_haploid) {
+            const auto revised_alleles = diploid::gt_alleles(map_gt);
+            vr.gt.v[sample.first*2] = bcf_gt_unphased(revised_alleles.first);
+            vr.gt.v[sample.first*2+1] = bcf_gt_unphased(revised_alleles.second);
+            cerr << "revised_alleles: " << revised_alleles.first << "/" << revised_alleles.second << "\n";
+        } else {
+            vr.gt.v[sample.first*2] = bcf_gt_unphased(map_gt);
+            vr.gt.v[sample.first*2+1] = bcf_gt_missing;
+            cerr << "revised_alleles: " << map_gt << "\n";
+        }
+        // cerr << vf.gr[sample.first * 2]
+        
+        if (!vr.was_haploid) {
+        } else {
+        }
         gq.v[sample.first] = std::min(99, (int) round(10.0*(map_gll - silver_gll)/log(10.0)));
     }
 
@@ -228,7 +228,10 @@ Status revise_genotypes(const genotyper_config& cfg, const unified_site& us,
     if (bcf_update_genotypes(hdr, record.get(), vr.gt.v, 2*record->n_sample)) {
         return Status::Failure("genotyper::revise_genotypes: bcf_update_genotypes failed");
     }
-
+    
+    cerr << "gt after revise: ";
+    for (int el_idx = 0; el_idx < vr.gt.capacity; ++el_idx) cerr << vr.gt[el_idx] << " ";
+    cerr << endl;
     return Status::OK();
 }
 
@@ -282,6 +285,7 @@ Status prepare_dataset_records(const genotyper_config& cfg, const unified_site& 
     variant_records.clear();
 
     Status s;
+    cerr << "dataset: " << dataset << endl;
 
     // Keep records not overlapping the site only if they actually have an ALT
     // allele that's in the unification (a non-aligned indel). Also, collect
@@ -336,6 +340,9 @@ Status prepare_dataset_records(const genotyper_config& cfg, const unified_site& 
     S(update_min_ref_depth(dataset, hdr, bcf_nsamples, sample_mapping,
                            ref_records, depth, min_ref_depth));
 
+    // if (rp->was_haploid) {
+    //     diploid_haploid_transformer.transform(hdr, record.get());
+    // }
     // ex post facto check for reference confidence records whose GT is other
     // than 0/0 (probably ./.), which we'll translate to InputNonCalled
     // We exclude 'haploid' records from this treatment for now as observed
@@ -344,7 +351,6 @@ Status prepare_dataset_records(const genotyper_config& cfg, const unified_site& 
     if (variant_records.empty() || !cfg.allow_partial_data) {
         for (const auto& rp : all_records) {
             if (rp->is_ref && !rp->was_haploid) {
-                cerr << "ToDo: convert back diploid --> haploid\n";
                 for (unsigned i = 0; i < 2*rp->p->n_sample; i++) {
                     if (bcf_gt_is_missing(rp->gt[i]) || bcf_gt_allele(rp->gt[i]) != 0) {
                         rnc = NoCallReason::InputNonCalled;
@@ -381,7 +387,7 @@ static Status translate_genotypes(const genotyper_config& cfg, const unified_sit
     assert(!site.monoallelic);
     variant_records_used.clear();
     Status s;
-
+    // cerr << "Dataset: " << dataset << "; bcf_nsamples: " << bcf_nsamples << "; sample_mapping size:" << sample_mapping.size() << "; variant_records size: " << variant_records.size() << "; genotypes size: " << genotypes.size() << "\n"; 
     // Scan the variant records to pull out those with 0/0 genotype calls
     // from those actually presenting variation
     vector<shared_ptr<bcf1_t_plus>> records_00, records_non00;
@@ -401,6 +407,7 @@ static Status translate_genotypes(const genotyper_config& cfg, const unified_sit
         }
     }
 
+    // cerr << "Here: " << records_00.size() << ", " << records_non00.size() <<"\n";
     // update min_ref_depth with found 0/0 records
     S(update_min_ref_depth(dataset, dataset_header, bcf_nsamples, sample_mapping,
                            records_00, depth, min_ref_depth));
@@ -694,6 +701,8 @@ Status genotype_site(const genotyper_config& cfg, MetadataCache& cache, BCFData&
                      bool residualsFlag, shared_ptr<string> &residual_rec,
                      atomic<bool>* ext_abort) {
     Status s;
+    for (int i = 0; i < samples.size(); ++i)
+        cerr << "sample: " << samples[i] << "\n";
 
     // Initialize a vector for the unified genotype calls for each sample,
     // starting with everything missing. We'll then loop through BCF records
@@ -736,7 +745,7 @@ Status genotype_site(const genotyper_config& cfg, MetadataCache& cache, BCFData&
 
         // load BCF records overlapping the site by "merging" the iterators
         shared_ptr<const bcf_hdr_t> dataset_header;
-        vector<vector<shared_ptr<bcf1_t>>> recordss(iterators.size());
+        // vector<vector<shared_ptr<bcf1_t>>> recordss(iterators.size()); // ToDo: remove this line
         vector<shared_ptr<bcf1_t>> records;
 
         for (const auto& iter : iterators) {
@@ -796,12 +805,12 @@ Status genotype_site(const genotyper_config& cfg, MetadataCache& cache, BCFData&
                                     genotypes, variant_records_used));
         }
 
+        // ToDo: return data to haploid form
+
         // Update FORMAT fields for this dataset.
         if (!(cfg.squeeze && variant_records.empty() && !all_records.empty())) {
-            cerr << "before update_format_fields (2)\n";
             S(update_format_fields(cfg, dataset, dataset_header.get(), sample_mapping, site,
                                 format_helpers, all_records, variant_records_used));
-            cerr << "after update_format_fields (2)\n";
             // But if rnc = MissingData, PartialData, UnphasedVariants, or OverlappingVariants, then
             // we must censor the FORMAT fields as potentially unreliable/misleading.
             for (const auto& p : sample_mapping) {
@@ -833,10 +842,8 @@ Status genotype_site(const genotyper_config& cfg, MetadataCache& cache, BCFData&
         } else {
             // Short path if cfg.squeeze && variant_records.empty() && !all_records.empty():
             //   Update DP only and apply squeeze transform
-            cerr << "before update_format_fields\n";
             S(update_format_fields(cfg, dataset, dataset_header.get(), sample_mapping, site,
                                    format_helpers, all_records, variant_records_used, true));
-            cerr << "after update_format_fields\n";
             for (const auto& p : sample_mapping) {
                 genotypes[p.second*2].RNC = NoCallReason::N_A;
                 genotypes[p.second*2+1].RNC = NoCallReason::N_A;
@@ -877,6 +884,7 @@ Status genotype_site(const genotyper_config& cfg, MetadataCache& cache, BCFData&
             genotypes[2*i].allele > genotypes[2*i+1].allele) {
             swap(genotypes[2*i], genotypes[2*i+1]);
         }
+        // if (was_haploid)
     }
     // Create the destination BCF record for this site.
     ans = shared_ptr<bcf1_t>(bcf_init(), &bcf_destroy);
@@ -928,6 +936,7 @@ Status genotype_site(const genotyper_config& cfg, MetadataCache& cache, BCFData&
     vector<int32_t> gt;
     for (const auto& c : genotypes) {
         gt.push_back(c.allele);
+        cerr << "gt-allele:" << c.allele << endl;
     }
     assert(gt.size() == genotypes.size());
     if (bcf_update_genotypes(hdr, ans.get(), gt.data(), gt.size()) != 0) {

@@ -977,266 +977,6 @@ Status update_format_fields(const genotyper_config& cfg, const string& dataset, 
     return Status::OK();
 }
 
-class BCFRecordTransformer {
-protected:
-    // Overloaded wrapper function to call bcf_get_format of the correct
-    // format field type
-    htsvecbox<int32_t> iv_;
-    htsvecbox<float> fv_;
-    int bcf_get_format_wrapper(const bcf_hdr_t* dataset_header, bcf1_t* record, const char* field_name, int32_t** v) {
-        int ans = bcf_get_format_int32(dataset_header, record, field_name, &iv_.v, &iv_.capacity);
-        *v = iv_.v;
-        return ans;
-    }
-    int bcf_get_format_wrapper(const bcf_hdr_t* dataset_header, bcf1_t* record, const char* field_name, float** v) {
-        int ans = bcf_get_format_float(dataset_header, record, field_name, &fv_.v, &fv_.capacity);
-        *v = fv_.v;
-        return ans;
-    }
-
-    int bcf_get_info_wrapper(const bcf_hdr_t* dataset_header, bcf1_t* record, const char* field_name, int32_t** v) {
-        int ans = bcf_get_info_int32(dataset_header, record, field_name, &iv_.v, &iv_.capacity);
-        *v = iv_.v;
-        return ans;
-    }
-    int bcf_get_info_wrapper(const bcf_hdr_t* dataset_header, bcf1_t* record, const char* field_name, float** v) {
-        int ans = bcf_get_info_float(dataset_header, record, field_name, &fv_.v, &fv_.capacity);
-        *v = fv_.v;
-        return ans;
-    }
-};
-
-class HaploidToDiploidTransformer : public BCFRecordTransformer {
-public:
-    Status transform(const bcf_hdr_t *header, bcf1_t *record) {
-        assert(record->n_sample == 1);
-        // assert(nGT == 1);
-        Status s;
-        S(transform_info(header, record));
-        S(transform_format(header, record));
-        return Status::OK();
-    }
-
-protected:
-    Status transform_format(const bcf_hdr_t *header, bcf1_t *record) {
-        int nret;
-        int num_alleles = record->n_allele;
-        int num_genotypes = num_alleles*(num_alleles + 1)/2;
-        // cerr << "(!) bcf_haploid_to_diploid: (num_alleles: " << num_alleles << "; num_genotypes: " << num_genotypes << "; #FMT_fields: " << record->n_fmt << ")\n";
-
-        for (int i = 0; i < record->n_fmt; i++) {
-            bcf_fmt_t *fmt = &record->d.fmt[i];
-
-            int vlen = bcf_hdr_id2length(header,BCF_HL_FMT,fmt->id);
-
-            if ( vlen!=BCF_VL_G) continue; // no need to change
-
-            int type = bcf_hdr_id2type(header,BCF_HL_FMT,fmt->id);
-
-
-            if ( !( type==BCF_HT_REAL || type==BCF_HT_INT ) ) continue;
-
-            const char* fmt_field_id = bcf_hdr_int2id(header, BCF_DT_ID, fmt->id);
-            // cerr << "(!) format field " << i << "; id: " << fmt->id << "; stringID: " << fmt_field_id << "; vlen: " << vlen << "; type: " << type << "\n";
-            // cerr << "before bcf_get_info_values\n";
-
-            int32_t *dat_int = nullptr;
-            float *dat_float = nullptr;
-
-            switch (type) {
-                case BCF_HT_INT:
-                    nret = bcf_get_format_wrapper(header, record, fmt_field_id, &dat_int);
-                    break;
-                case BCF_HT_REAL:
-                    nret = bcf_get_format_wrapper(header, record, fmt_field_id, &dat_float);
-                    break;
-            }
-
-            if (nret < 0)
-            {
-                hts_log_error("Could not access FORMAT/%s at %s:%d [%d]",
-                    fmt_field_id, bcf_seqname(header,record), record->pos+1, nret);
-                return Status::Failure("Could not access FORMAT");
-            }
-
-            vector<int32_t> vals_int32;
-            vector<float> vals_float;
-            switch (type) {
-                case BCF_HT_INT:
-                    vals_int32.resize(num_genotypes);
-                    for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {
-                        for (int allele_2_idx = 0; allele_2_idx < num_alleles; ++allele_2_idx) {
-                            int pseudodiploid_allele_idx = bcf_alleles2gt(allele_2_idx, allele_idx);
-                            vals_int32[pseudodiploid_allele_idx] = bcf_int32_missing;
-                        }
-                    }
-                    for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {
-                        int pseudodiploid_allele_idx = bcf_alleles2gt(bcf_gt_missing, allele_idx);
-                        vals_int32[pseudodiploid_allele_idx] = dat_int[allele_idx]; //*((int32_t*)(mdat + sizeof(int32_t) * allele_idx));
-                    }
-
-                    nret = bcf_update_format(header, record, fmt_field_id, vals_int32.data(), vals_int32.size(), type);
-                    if (nret < 0){
-                        hts_log_error("Could not update FORMAT/%s at %s:%d [%d]",
-                            fmt_field_id, bcf_seqname(header,record), record->pos+1, nret);
-                        return Status::Failure("Could not access INFO");
-                    }
-                    break;
-                case BCF_HT_REAL:
-                    vals_float.resize(num_genotypes);
-                    for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {
-                        for (int allele_2_idx = 0; allele_2_idx < num_alleles; ++allele_2_idx) {
-                            int pseudodiploid_allele_idx = bcf_alleles2gt(allele_2_idx, allele_idx);
-                            vals_float[pseudodiploid_allele_idx] = bcf_float_missing;
-                        }
-                    }
-                    for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {
-                        int pseudodiploid_allele_idx = bcf_alleles2gt(bcf_gt_missing, allele_idx);
-                        vals_float[pseudodiploid_allele_idx] = dat_float[allele_idx]; //*((float*)(mdat + sizeof(float) * allele_idx));
-                    }
-                    nret = bcf_update_info(header, record, fmt_field_id, vals_float.data(), vals_float.size(), type);
-
-                    if (nret < 0){
-                        hts_log_error("Could not update FORMAT/%s at %s:%d [%d]",
-                            fmt_field_id, bcf_seqname(header,record), record->pos+1, nret);
-                        return Status::Failure("Could not access INFO");
-                    }
-                    break;
-            }
-        }
-
-        return Status::OK();
-    }
-
-
-    Status transform_info(const bcf_hdr_t *header, bcf1_t *record) {
-        // int nret;
-        // int num_alleles = record->n_allele;
-        // int num_genotypes = num_alleles*(num_alleles + 1)/2;
-        // cerr << "(!) bcf_haploid_to_diploid: (num_alleles: " << num_alleles << "; num_genotypes: " << num_genotypes << "; #FMT_fields: " << record->n_fmt << ")\n";
-
-        // for (int i = 0; i < record->n_fmt; i++) {
-        //     // bcf_info_t *info = &record->d.info[i];
-        //     bcf_fmt_t *fmt = &record->d.fmt[i];
-
-        //     // int vlen = bcf_hdr_id2length(header,BCF_HL_INFO,info->key);
-        //     int vlen = bcf_hdr_id2length(header,BCF_HL_FMT,fmt->id);
-
-        //     if ( vlen!=BCF_VL_G) continue; // no need to change
-
-        //     // int type = bcf_hdr_id2type(header,BCF_HL_INFO,info->key);
-        //     int type = bcf_hdr_id2type(header,BCF_HL_FMT,fmt->id);
-
-
-        //     if ( !( type==BCF_HT_REAL || type==BCF_HT_INT ) ) continue;
-
-        //     const char* fmt_field_id = bcf_hdr_int2id(header, BCF_DT_ID, fmt->id);
-        //     cerr << "(!) format field " << i << "; id: " << fmt->id << "; stringID: " << fmt_field_id << "; vlen: " << vlen << "; type: " << type << "\n";
-
-        //     // uint8_t *dat = NULL;
-        //     // int mdat;
-        //     // nret = bcf_get_info_values(header, record, bcf_hdr_int2id(header,BCF_DT_ID,info->key), (void**)&dat, &mdat, type);
-        //     // if ( nret<0 ) {
-        //     //    hts_log_error("Could not access INFO/%s at %s:%d [%d]",
-        //     //        bcf_hdr_int2id(header,BCF_DT_ID,info->key), bcf_seqname(header,line), line->pos+1, nret);
-        //     //     // return Status::Failure(err_msg);
-        //     //     return Status::Failure("Could not access INFO");
-        //     // }
-        //     // htsvecbox<int32_t> iv_;
-        //     // htsvecbox<float> fv_;
-        //     cerr << "before bcf_get_info_values\n";
-        //     // switch (type) {
-        //     //     case BCF_HT_INT;
-        //     //         nret = bcf_get_format_values(header, record, fmt_field_id, &iv_.v, &iv_.capacity, type);
-        //     // } 
-
-        //     int32_t *dat_int = nullptr;
-        //     float *dat_float = nullptr;
-
-        //     switch (type) {
-        //         case BCF_HT_INT:
-        //             nret = bcf_get_format_wrapper(header, record, fmt_field_id, &dat_int);
-        //             break;
-        //         case BCF_HT_REAL:
-        //             nret = bcf_get_format_wrapper(header, record, fmt_field_id, &dat_float);
-        //             break;
-        //     }
-
-
-
-        //     // nret = bcf_get_format_values(header, record, fmt_field_id, (void**)&dat, &mdat, type);
-
-        //     cerr << "after bcf_get_info_values; nret = " << nret << "\n";
-
-        //     if ( nret<0 )
-        //     {
-        //         hts_log_error("Could not access FORMAT/%s at %s:%d [%d]",
-        //             fmt_field_id, bcf_seqname(header,record), record->pos+1, nret);
-        //         return Status::Failure("Could not access FORMAT");
-        //     }
-
-        //     vector<int32_t> vals_int32;
-        //     vector<float> vals_float;
-        //     switch (type) {
-        //         case BCF_HT_INT:
-        //             vals_int32.resize(num_genotypes);
-        //             for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {
-        //                 for (int allele_2_idx = 0; allele_2_idx < num_alleles; ++allele_2_idx) {
-        //                     int pseudodiploid_allele_idx = bcf_alleles2gt(allele_2_idx, allele_idx);
-        //                     cerr << "allele_id: " << allele_idx << ", " << allele_2_idx  << "; pseudodiploid_allele_idx: " << pseudodiploid_allele_idx << "; value: missing\n";
-        //                     vals_int32[pseudodiploid_allele_idx] = bcf_int32_missing;
-        //                 }
-        //             }
-        //             for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {
-        //                 int pseudodiploid_allele_idx = bcf_alleles2gt(bcf_gt_missing, allele_idx);
-        //                 cerr << "allele_id: " << allele_idx << "; pseudodiploid_allele_idx: " << pseudodiploid_allele_idx << "; value: " << dat_int[allele_idx] << "\n";
-        //                 vals_int32[pseudodiploid_allele_idx] = dat_int[allele_idx]; //*((int32_t*)(mdat + sizeof(int32_t) * allele_idx));
-        //             }
-
-        //             for (int idx = 0; idx < vals_int32.size(); ++idx) {
-        //                 cerr << "vals_int32[" << idx << "] = " << vals_int32[idx] << "\n";
-        //             }
-        //             // nret = bcf_update_info(header, record, bcf_hdr_int2id(header, BCF_DT_ID, info->key), vals_int32.data(), vals_int32.size(), type);
-        //             nret = bcf_update_format(header, record, fmt_field_id, vals_int32.data(), vals_int32.size(), type);
-        //             if (nret < 0) {
-        //                 // sprintf(err_msg, "Could not update INFO/%s at %s:%d [%d]",
-        //                 //     bcf_hdr_int2id(header,BCF_DT_ID,info->key), bcf_seqname(header,record), record->pos+1, nret);
-        //                 // return Status::Failure(err_msg);
-        //                 return Status::Failure("Could not access INFO");
-        //             }
-        //             break;
-        //         case BCF_HT_REAL:
-        //             vals_float.resize(num_genotypes);
-        //             for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {
-        //                 for (int allele_2_idx = 0; allele_2_idx < num_alleles; ++allele_2_idx) {
-        //                     int pseudodiploid_allele_idx = bcf_alleles2gt(allele_2_idx, allele_idx);
-        //                     vals_float[pseudodiploid_allele_idx] = bcf_float_missing;
-        //                 }
-        //             }
-        //             for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {
-        //                 int pseudodiploid_allele_idx = bcf_alleles2gt(bcf_gt_missing, allele_idx);
-        //                 vals_float[pseudodiploid_allele_idx] = dat_float[allele_idx]; //*((float*)(mdat + sizeof(float) * allele_idx));
-        //             }
-        //             // nret = bcf_update_info(header, record, bcf_hdr_int2id(header, BCF_DT_ID, info->key), vals_float.data(), vals_float.size(), type);
-        //             nret = bcf_update_info(header, record, fmt_field_id, vals_float.data(), vals_float.size(), type);
-        //             if (nret < 0) {
-        //                 // sprintf(err_msg, "Could not update INFO/%s at %s:%d [%d]",
-        //                 //     bcf_hdr_int2id(header,BCF_DT_ID,info->key), bcf_seqname(header,record), record->pos+1, nret);
-        //                 // return Status::Failure(err_msg);
-        //                 return Status::Failure("Could not access INFO");
-        //             }
-        //             break;            
-        //     }
-        // }
-
-        return Status::OK();
-    }
-
-};
-
-
-
-
 // Helper class for keeping track of the per-allele depth of coverage info in
 // a bcf1_t record. There are a couple different cases to handle, depending on
 // the upstream variant caller and whether we're looking at a reference confidence
@@ -1412,4 +1152,176 @@ static Status update_min_ref_depth(const string& dataset, const bcf_hdr_t* datas
     }
     return Status::OK();
 }
+
+class BCFRecordTransformer {
+protected:
+    // Overloaded wrapper function to call bcf_get_format of the correct
+    // format field type
+    htsvecbox<int32_t> iv_;
+    htsvecbox<float> fv_;
+    int bcf_get_format_wrapper(const bcf_hdr_t* dataset_header, bcf1_t* record, const char* field_name, int32_t** v) {
+        int ans = bcf_get_format_int32(dataset_header, record, field_name, &iv_.v, &iv_.capacity);
+        *v = iv_.v;
+        return ans;
+    }
+    int bcf_get_format_wrapper(const bcf_hdr_t* dataset_header, bcf1_t* record, const char* field_name, float** v) {
+        int ans = bcf_get_format_float(dataset_header, record, field_name, &fv_.v, &fv_.capacity);
+        *v = fv_.v;
+        return ans;
+    }
+
+    int bcf_get_info_wrapper(const bcf_hdr_t* dataset_header, bcf1_t* record, const char* field_name, int32_t** v) {
+        int ans = bcf_get_info_int32(dataset_header, record, field_name, &iv_.v, &iv_.capacity);
+        *v = iv_.v;
+        return ans;
+    }
+    int bcf_get_info_wrapper(const bcf_hdr_t* dataset_header, bcf1_t* record, const char* field_name, float** v) {
+        int ans = bcf_get_info_float(dataset_header, record, field_name, &fv_.v, &fv_.capacity);
+        *v = fv_.v;
+        return ans;
+    }
+};
+
+// Helper to transform haploid records (which cn be generated by some callers e.g. Strelka2 and Dragen)
+// into records which mimic diploid variants during record preprocessing step so that downstream processing
+// works correctly.
+// All numeric values in FORMAT (and possibly INFO) fields with Number=G(enotype) are transformed so that
+// value for haploid genotype X becomes a value for diploid genotype ./X. The rest genotypes get missing values
+// This helper is intended to be used with the opposite DiploidHapoidTransformer postprocessing.
+// ToDo: string values are not yet processed.
+class HaploidToDiploidTransformer : public BCFRecordTransformer {
+public:
+    Status transform(const bcf_hdr_t *header, bcf1_t *record) {
+        // assert(record->n_sample == 1);
+        // htsvecbox<int> gt;
+        // auto nGT = bcf_get_genotypes(hdr, record.get(), &ans.gt.v, &ans.gt.capacity);
+        // assert(nGT == 1);
+        Status s;
+        S(transform_gt(header, record));
+        S(transform_info(header, record));
+        S(transform_format(header, record));
+        return Status::OK();
+    }
+
+protected:
+
+    Status transform_gt(const bcf_hdr_t *header, bcf1_t *record) {
+        htsvecbox<int32_t> gt;
+        auto nGT = bcf_get_genotypes(header, record, &gt.v, &gt.capacity);
+        // for (const auto& c : genotypes) {
+        //     gt.push_back(c.allele);
+        // }
+        assert(nGT == gt.capacity);
+        vector<int32_t> gt_diploid(nGT);
+        for (int gt_idx = 0; gt_idx < nGT; ++gt_idx) {
+            gt_diploid[gt_idx] = bcf_alleles2gt(bcf_gt_missing, gt[gt_idx]);
+        }
+        // assert(gt.size() == genotypes.size());
+        if (bcf_update_genotypes(header, record, gt_diploid.data(), gt_diploid.size()) != 0) {
+            return Status::Failure("bcf_update_genotypes");
+        }
+        return Status::OK();
+    }
+
+    Status transform_format(const bcf_hdr_t *header, bcf1_t *record) {
+        int nret;
+        int num_samples = record->n_sample;
+        int num_alleles = record->n_allele;
+        int num_genotypes = diploid::genotypes(num_alleles);
+        for (int fmt_idx = 0; fmt_idx < record->n_fmt; fmt_idx++) {
+            bcf_fmt_t *fmt = &record->d.fmt[fmt_idx];
+
+            int vlen = bcf_hdr_id2length(header, BCF_HL_FMT, fmt->id);
+            if (vlen!=BCF_VL_G) continue;
+
+            int type = bcf_hdr_id2type(header, BCF_HL_FMT, fmt->id);
+            if ( !( type==BCF_HT_REAL || type==BCF_HT_INT ) ) continue;
+
+            const char* fmt_field_id = bcf_hdr_int2id(header, BCF_DT_ID, fmt->id);
+
+            #define BRANCH(type_t, missing_allele) {                                                                    \
+                type_t *dat = nullptr;                                                                                  \
+                nret = bcf_get_format_wrapper(header, record, fmt_field_id, &dat);                                      \
+                if (nret < 0) {                                                                                         \
+                    hts_log_error("Could not access FORMAT/%s at %s:%d [%d]",                                           \
+                        fmt_field_id, bcf_seqname(header, record), record->pos+1, nret);                                \
+                    return Status::Failure("Could not access FORMAT");                                                  \
+                }                                                                                                       \
+                vector<type_t> vals(num_genotypes * num_samples, missing_allele);                                       \
+                for (int sample_idx = 0; sample_idx < num_samples; ++sample_idx) {                                      \
+                    for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {                                  \
+                        int genotype_idx = diploid::alleles_gt(bcf_gt_missing, allele_idx);                             \
+                        vals[sample_idx * num_genotypes + genotype_idx] = dat[sample_idx * num_alleles + allele_idx];   \
+                    }                                                                                                   \
+                }                                                                                                       \
+                nret = bcf_update_format(header, record, fmt_field_id, vals.data(), vals.size(), type);                 \
+                if (nret < 0){                                                                                          \
+                    hts_log_error("Could not update FORMAT/%s at %s:%d [%d]",                                           \
+                        fmt_field_id, bcf_seqname(header, record), record->pos+1, nret);                                \
+                    return Status::Failure("Could not update FORMAT");                                                  \
+                }                                                                                                       \
+            }
+            switch (type) {
+                case BCF_HT_INT:  BRANCH(int32_t, bcf_int32_missing); break;
+                case BCF_HT_REAL: BRANCH(float, bcf_float_missing); break;
+                default:
+                    hts_log_error("Unexpected type %d", fmt->type);
+                    return Status::Failure("Unexpected type of FORMAT field");
+            }
+            #undef BRANCH
+        }
+
+        return Status::OK();
+    }
+
+    Status transform_info(const bcf_hdr_t *header, bcf1_t *record) {
+        int nret;
+        int num_alleles = record->n_allele;
+        int num_genotypes = diploid::genotypes(num_alleles);
+        for (int info_idx = 0; info_idx < record->n_info; info_idx++) {
+            bcf_info_t *info = &record->d.info[info_idx];
+
+            int vlen = bcf_hdr_id2length(header, BCF_HL_INFO, info->key);
+            if (vlen != BCF_VL_G) continue;
+
+            int type = bcf_hdr_id2type(header, BCF_HL_INFO, info->key);
+            if ( !(type==BCF_HT_REAL || type==BCF_HT_INT) ) continue;
+
+            const char* info_field_id = bcf_hdr_int2id(header, BCF_DT_ID, info->key);
+
+            #define BRANCH(type_t, missing_allele) {                                                    \
+                type_t *dat = nullptr;                                                                  \
+                nret = bcf_get_info_wrapper(header, record, info_field_id, &dat);                       \
+                if (nret < 0) {                                                                         \
+                    hts_log_error("Could not access INFO/%s at %s:%d [%d]",                             \
+                        info_field_id, bcf_seqname(header, record), record->pos+1, nret);               \
+                    return Status::Failure("Could not access INFO");                                    \
+                }                                                                                       \
+                vector<type_t> vals(num_genotypes, missing_allele);                                     \
+                for (int allele_idx = 0; allele_idx < num_alleles; ++allele_idx) {                      \
+                    int genotype_idx = diploid::alleles_gt(bcf_gt_missing, allele_idx);                 \
+                    vals[genotype_idx] = dat[allele_idx];                                               \
+                }                                                                                       \
+                nret = bcf_update_info(header, record, info_field_id, vals.data(), vals.size(), type);  \
+                if (nret < 0){                                                                          \
+                    hts_log_error("Could not update INFO/%s at %s:%d [%d]",                             \
+                        info_field_id, bcf_seqname(header, record), record->pos+1, nret);               \
+                    return Status::Failure("Could not update INFO");                                    \
+                }                                                                                       \
+            }
+            switch (type) {
+                case BCF_HT_INT:  BRANCH(int32_t, bcf_int32_missing); break;
+                case BCF_HT_REAL: BRANCH(float, bcf_float_missing); break;
+                default:
+                    hts_log_error("Unexpected type %d", info->type);
+                    return Status::Failure("Unexpected type of FORMAT field");
+            }
+            #undef BRANCH
+        }
+
+        return Status::OK();
+    }
+};
+
+
 }
