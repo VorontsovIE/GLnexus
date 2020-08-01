@@ -157,16 +157,16 @@ Status validate_bcf(const std::vector<std::pair<std::string, size_t> > &contigs,
   }
 
   // validate genotype likelihoods (PL: all entries nonnegative)
-  htsvecbox<int32_t> pl;
-  int nPL = bcf_get_format_int32(hdr, bcf, "PL", &pl.v, &pl.capacity);
-  if (nPL >= 0) {
-    for (int i = 0; i < nPL && pl[i] != bcf_int32_vector_end; i++) {
-      if (pl[i] != bcf_int32_missing && pl[i] < 0) {
-        return Status::Invalid("negative PL entry in gVCF record",
-                               filename + " " + range(bcf).str(contigs));
-      }
-    }
-  }
+  // htsvecbox<int32_t> pl;
+  // int nPL = bcf_get_format_int32(hdr, bcf, "PL", &pl.v, &pl.capacity);
+  // if (nPL >= 0) {
+  //   for (int i = 0; i < nPL && pl[i] != bcf_int32_vector_end; i++) {
+  //     if (pl[i] != bcf_int32_missing && pl[i] < 0) {
+  //       return Status::Invalid("negative PL entry in gVCF record",
+  //                              filename + " " + range(bcf).str(contigs));
+  //     }
+  //   }
+  // }
   /*
       htsvecbox<float> gl;
       int nGL = bcf_get_format_float(hdr, bcf, "GL", &gl.v, &gl.capacity);

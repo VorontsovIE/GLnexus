@@ -120,7 +120,8 @@ GLnexus::Status bcf_get_genotype_log_likelihoods(const bcf_hdr_t* header, bcf1_t
             } else if (x >= 0) {
                 gll[ik] = double(igl[ik])/(-10.0*LOG10_E);
             } else {
-                return Status::Invalid("bcf_get_genotype_log_likelihoods: negative PL entry");
+                // return Status::Invalid("bcf_get_genotype_log_likelihoods: negative PL entry");
+                gll[ik] = double(990)/(-10.0*LOG10_E);;
             }
         }
         return Status::OK();
