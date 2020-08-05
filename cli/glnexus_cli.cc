@@ -78,21 +78,6 @@ static int all_steps(const vector<string> &vcf_files,
         nr_threads = std::thread::hardware_concurrency();
     }
 
-    // Load the GVCFs into the database
-    unique_ptr<GLnexus::KeyValue::DB> db;
-    {
-        // use an empty range filter
-        vector<GLnexus::range> ranges;
-        H("bulk load into DB",
-          GLnexus::cli::utils::db_bulk_load(console, mem_budget, nr_threads, vcf_files, dbpath, ranges, contigs, &db, false));
-    }
-    assert(db);
-
-    if (iter_compare) {
-        H("compare database iteration methods",
-          GLnexus::cli::utils::compare_db_itertion_algorithms(console, dbpath, 50));
-    }
-
     // discover alleles
     vector<GLnexus::range> ranges;
     if (bedfilename.empty()) {
@@ -102,6 +87,19 @@ static int all_steps(const vector<string> &vcf_files,
         }
     } else {
         H("parse the bed file", GLnexus::cli::utils::parse_bed_file(console, bedfilename, contigs, ranges));
+    }
+
+    // Load the GVCFs into the database
+    unique_ptr<GLnexus::KeyValue::DB> db;
+    {
+        H("bulk load into DB",
+          GLnexus::cli::utils::db_bulk_load(console, mem_budget, nr_threads, vcf_files, dbpath, ranges, contigs, &db, false));
+    }
+    assert(db);
+
+    if (iter_compare) {
+        H("compare database iteration methods",
+          GLnexus::cli::utils::compare_db_itertion_algorithms(console, dbpath, 50));
     }
     GLnexus::discovered_alleles dsals;
     unsigned sample_count = 0;
