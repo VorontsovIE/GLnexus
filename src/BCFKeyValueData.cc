@@ -1026,8 +1026,7 @@ static Status import_gvcf_inner(BCFKeyValueData_body *body_,
     if (!vcf) return Status::IOError("opening gVCF file", filename);
     unique_ptr<bcf_hdr_t, void(*)(bcf_hdr_t*)> hdr(bcf_hdr_read(vcf.get()), &bcf_hdr_destroy);
 
-    S(vcf_validate_basic_facts(metadata, dataset, filename, hdr.get(), vcf.get(),
-                               rslt.samples));
+    S(vcf_validate_basic_facts(metadata, dataset, filename, hdr.get(), rslt.samples));
 
     // Atomically verify metadata and prepare
     {

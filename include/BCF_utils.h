@@ -27,7 +27,6 @@ Status validate_bcf(const std::vector<std::pair<std::string, size_t>>& contigs,
 Status vcf_validate_basic_facts(MetadataCache& metadata,
                                 const std::string& dataset,
                                 const std::string& filename, bcf_hdr_t* hdr,
-                                vcfFile* vcf,
                                 std::set<std::string>& samples_out);
 
 }  // namespace GLnexus
