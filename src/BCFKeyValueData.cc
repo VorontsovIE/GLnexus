@@ -24,6 +24,18 @@ using namespace std;
 #include "BCFKeyValueData_utils.h"
 #include "htslib/synced_bcf_reader.h"
 
+// When `--intervals` option is specified to restrict processing
+// to a small part of genome, then a cursor either jumps directly
+// to a requested interval (for indexed files) or skip records
+// outside of specified ranges.
+// However query logic request all the intervals which *overlap* the query.
+// There can be intervals which start before the query interval left boundary
+// but still overlap the query.
+// To account for such intervals, cursor should be moved
+// not to a left boundary of the query but to a some point before it.
+// RANGE_LEFT_PAD = 1000nt is long enough to catch most of such cases.
+const int RANGE_LEFT_PAD = 1000;
+
 namespace GLnexus {
 
 size_t BCFKeyValueDataPrefixLength() { return BCFBucketRange::PREFIX_LENGTH; }
@@ -1009,7 +1021,24 @@ static Status bulk_insert_gvcf_key_values(BCFBucketRange& rangeHelper,
     return buffer.flush();
 }
 
-static Status encode_range_filters(MetadataCache& metadata, const set<range>& range_filter, string& result) {
+static set<range> pad_ranges(const MetadataCache& metadata, const set<range>& range_filter, unsigned int pad_left, unsigned int pad_right) {
+    set<range> result;
+    const std::vector<std::pair<std::string,size_t> >& contigs = metadata.contigs();
+    for (auto iter = range_filter.begin(); iter != range_filter.end(); ++iter) {
+        int rid = iter->rid;
+        int beg = iter->beg - pad_left;
+        int end = iter->end + pad_right;
+        if (beg < 0)
+            beg = 0;
+        if (end > contigs[rid].second)
+            end = contigs[rid].second;
+
+        result.insert(range(rid, beg, end));
+    }
+    return result;
+}
+
+static Status encode_range_filters(const MetadataCache& metadata, const set<range>& range_filter, string& result) {
     ostringstream range_str;
     const std::vector<std::pair<std::string,size_t> >& contigs = metadata.contigs();
     for (auto rng = range_filter.begin(); rng != range_filter.end(); ++rng){
@@ -1052,7 +1081,8 @@ static Status import_gvcf_inner(BCFKeyValueData_body *body_,
                                                [](vcfFile* f) { bcf_close(f); });
 
     string range_filter_encoded;
-    S(encode_range_filters(metadata, range_filter, range_filter_encoded));
+    set<range> padded_filters = pad_ranges(metadata, range_filter, RANGE_LEFT_PAD, 0);
+    S(encode_range_filters(metadata, padded_filters, range_filter_encoded));
 
     unique_ptr<bcf_srs_t, void(*)(bcf_srs_t*)> reader(bcf_sr_init(), [](bcf_srs_t* r){ bcf_sr_destroy(r); });
 
