@@ -22,6 +22,7 @@
 using namespace std;
 
 #include "BCFKeyValueData_utils.h"
+#include "htslib/synced_bcf_reader.h"
 
 namespace GLnexus {
 
@@ -435,7 +436,7 @@ Status BCFKeyValueData::dataset_header(const string& dataset,
     return Status::OK();
 }
 
-// Extract bucket records overlapping the query range and satsifying the
+// Extract bucket records overlapping the query range and satisfying the
 // predicate, if any
 //
 // include_danglers: if false, exclude records whose beg is below that of
@@ -913,10 +914,11 @@ static Status bulk_insert_gvcf_key_values(BCFBucketRange& rangeHelper,
                                           const set<range>& range_filter,
                                           const bcf_hdr_t *hdr,
                                           vcfFile *vcf,
+                                          bcf_srs_t* reader,
                                           BCFKeyValueData::import_result& rslt) {
     Status s;
     BulkInsertBuffer buffer(*db);
-    unique_ptr<bcf1_t, void(*)(bcf1_t*)> vt(bcf_init(), &bcf_destroy);
+    bcf1_t* vt = nullptr; // Memory for it is managed by reader
     int prev_pos = -1;
     int prev_rid = -1;
     vector<shared_ptr<bcf1_t>> danglers;
@@ -929,11 +931,9 @@ static Status bulk_insert_gvcf_key_values(BCFBucketRange& rangeHelper,
     S(db->collection("bcf", coll_bcf));
 
     // scan the BCF records
-    int c;
-    for(c = bcf_read(vcf, hdr, vt.get());
-        c == 0 && vt->errcode == 0;
-        c = bcf_read(vcf, hdr, vt.get())) {
-        range vt_rng(vt.get());
+    while (bcf_sr_next_line(reader)) {
+        vt = bcf_sr_get_line(reader, 0);
+        range vt_rng(vt);
         last_range = vt_rng;
         if (!range_filter.empty()) {
             // Test range filter if applicable. It would be nice to use a
@@ -948,7 +948,7 @@ static Status bulk_insert_gvcf_key_values(BCFBucketRange& rangeHelper,
         // records are coordinate sorted. May also indicate we should just drop
         // the record for various reasons.
         bool skip_ingestion = false;
-        S(validate_bcf(metadata.contigs(), filename, hdr, vt.get(), prev_rid, prev_pos, skip_ingestion));
+        S(validate_bcf(metadata.contigs(), filename, hdr, vt, prev_rid, prev_pos, skip_ingestion));
         if (skip_ingestion) {
             rslt.skipped_records++;
             continue;
@@ -959,7 +959,7 @@ static Status bulk_insert_gvcf_key_values(BCFBucketRange& rangeHelper,
             // write old bucket K to DB
             S(write_bucket(rangeHelper, buffer, coll_bcf, writer, danglers_written_to_current_bucket,
                            dataset, bucket, rslt));
-            range next_bucket = rangeHelper.bucket(vt.get());
+            range next_bucket = rangeHelper.bucket(vt);
             S(write_danglers_between(rangeHelper, buffer, coll_bcf, dataset, bucket, rslt,
                                      danglers, next_bucket));
             bucket = next_bucket;
@@ -972,18 +972,22 @@ static Status bulk_insert_gvcf_key_values(BCFBucketRange& rangeHelper,
             write_danglers_to_in_mem_bucket(danglers, writer, next_bucket);
         }
         // write the record into the bucket
-        S(writer.add(vt.get()));
+        S(writer.add(vt));
         // if it dangles off the end of the bucket, add it to danglers for
         // inclusion in the next bucket
-        if (range(vt.get()).end > bucket.end) {
+        if (range(vt).end > bucket.end) {
             auto dangler = shared_ptr<bcf1_t>(bcf_init(), &bcf_destroy);
-            bcf_copy(dangler.get(), vt.get());
-            assert(range(dangler.get()) == range(vt.get()));
+            bcf_copy(dangler.get(), vt);
+            assert(range(dangler.get()) == range(vt));
             danglers.push_back(dangler);
         }
         prev_rid = vt->rid;
         prev_pos = vt->pos;
     }
+    if (reader->errnum) {
+        return Status::IOError("reading from gVCF file", filename + string(". ") + string(bcf_sr_strerror(reader->errnum)));
+    }
+    if (vt == nullptr) return Status::OK(); // Just no records are read
     if (vt->errcode != 0) {
         ostringstream msg;
         msg << filename << " bcf1_t::errcode = " << vt->errcode;
@@ -992,7 +996,6 @@ static Status bulk_insert_gvcf_key_values(BCFBucketRange& rangeHelper,
         }
         return Status::IOError("reading from gVCF file", msg.str());
     }
-    if (c != -1) return Status::IOError("reading from gVCF file", filename);
 
     // write out last bucket
     S(write_bucket(rangeHelper, buffer, coll_bcf, writer, danglers_written_to_current_bucket,
@@ -1006,6 +1009,30 @@ static Status bulk_insert_gvcf_key_values(BCFBucketRange& rangeHelper,
     return buffer.flush();
 }
 
+static Status encode_range_filters(MetadataCache& metadata, const set<range>& range_filter, string& result) {
+    ostringstream range_str;
+    const std::vector<std::pair<std::string,size_t> >& contigs = metadata.contigs();
+    for (auto rng = range_filter.begin(); rng != range_filter.end(); ++rng){
+        if (rng != range_filter.begin()) {
+            range_str << ",";
+        }
+
+        // range is a 0-based, exclusive [beg, end) region with integer chromosome id
+        // in bcf_sr_* coordinates are 0-based, inclusive; chromosome is a char* field
+        int from = rng->beg + 1;
+        int to = rng->end;
+
+        string chr_name;
+        if (rng->rid >= 0 && rng->rid < (int)contigs.size()) {
+            chr_name = std::get<0>(contigs[rng->rid]);
+        } else {
+            return Status::Failure("Unknown chromosome in range filters; rid:", std::to_string(rng->rid));
+        }
+        range_str << chr_name << ":" << from << "-" << to;
+    }
+    result = range_str.str();
+    return Status::OK();
+}
 
 // Temporary notes on DB schema, to be moved over to wiki.
 //
@@ -1023,6 +1050,29 @@ static Status import_gvcf_inner(BCFKeyValueData_body *body_,
     Status s;
     unique_ptr<vcfFile, void(*)(vcfFile*)> vcf(bcf_open(filename.c_str(), "r"),
                                                [](vcfFile* f) { bcf_close(f); });
+
+    string range_filter_encoded;
+    S(encode_range_filters(metadata, range_filter, range_filter_encoded));
+
+    unique_ptr<bcf_srs_t, void(*)(bcf_srs_t*)> reader(bcf_sr_init(), [](bcf_srs_t* r){ bcf_sr_destroy(r); });
+
+    // Try to initialize reader from indexed bgzip
+    bcf_sr_set_opt(reader.get(), BCF_SR_REQUIRE_IDX);
+    bcf_sr_set_regions(reader.get(), range_filter_encoded.c_str(), false);
+    bcf_sr_add_reader(reader.get(), filename.c_str());
+    if ( reader->errnum ) {
+        // Failed to initialize indexed reader
+        // Try to initialize reader from non-indexed file (or not even bgzip)
+        reader = unique_ptr<bcf_srs_t, void(*)(bcf_srs_t*)>(bcf_sr_init(), [](bcf_srs_t* r){ bcf_sr_destroy(r); });
+
+        // Don't work with index
+        bcf_sr_set_targets(reader.get(), range_filter_encoded.c_str(), false, 0);
+        bcf_sr_add_reader(reader.get(), filename.c_str());
+        if ( reader->errnum ) {
+            return Status::IOError("opening gVCF file", bcf_sr_strerror(reader->errnum));
+        }
+    }
+
     if (!vcf) return Status::IOError("opening gVCF file", filename);
     unique_ptr<bcf_hdr_t, void(*)(bcf_hdr_t*)> hdr(bcf_hdr_read(vcf.get()), &bcf_hdr_destroy);
 
@@ -1054,7 +1104,8 @@ static Status import_gvcf_inner(BCFKeyValueData_body *body_,
     // Note: we are not dealing at all with mid-flight failures
     S(bulk_insert_gvcf_key_values(*body_->rangeHelper, metadata, body_->db,
                                   dataset, filename, range_filter,
-                                  hdr.get(), vcf.get(), rslt));
+                                  hdr.get(), vcf.get(), reader.get(), rslt));
+    if ( reader->errnum ) return Status::Failure(bcf_sr_strerror(reader->errnum));
 
     // Update metadata atomically, now it will point to all the data
     Status retval = Status::Invalid();
@@ -1095,7 +1146,6 @@ static Status import_gvcf_inner(BCFKeyValueData_body *body_,
             body_->sample_count += rslt.samples.size();
         }
     }
-
     // good path
     return retval;
 }
