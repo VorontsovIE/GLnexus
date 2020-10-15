@@ -22,7 +22,7 @@
 using namespace std;
 
 #include "BCFKeyValueData_utils.h"
-#include "htslib/synced_bcf_reader.h"
+#include <synced_bcf_reader.h>
 
 // When `--intervals` option is specified to restrict processing
 // to a small part of genome, then a cursor either jumps directly
