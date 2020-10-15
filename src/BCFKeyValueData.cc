@@ -1021,6 +1021,16 @@ static Status bulk_insert_gvcf_key_values(BCFBucketRange& rangeHelper,
     return buffer.flush();
 }
 
+static set<range> entire_genome_ranges(const MetadataCache& metadata) {
+    set<range> result;
+    const std::vector<std::pair<std::string,size_t> >& contigs = metadata.contigs();
+    for (int rid = 0; rid < contigs.size(); ++rid) {
+        int contig_length = contigs[rid].second;
+        result.insert(range(rid, 0, contig_length));
+    }
+    return result;
+}
+
 static set<range> pad_ranges(const MetadataCache& metadata, const set<range>& range_filter, unsigned int pad_left, unsigned int pad_right) {
     set<range> result;
     const std::vector<std::pair<std::string,size_t> >& contigs = metadata.contigs();
@@ -1081,8 +1091,12 @@ static Status import_gvcf_inner(BCFKeyValueData_body *body_,
                                                [](vcfFile* f) { bcf_close(f); });
 
     string range_filter_encoded;
-    set<range> padded_filters = pad_ranges(metadata, range_filter, RANGE_LEFT_PAD, 0);
-    S(encode_range_filters(metadata, padded_filters, range_filter_encoded));
+    if (range_filter.empty()) {
+        S(encode_range_filters(metadata, entire_genome_ranges(metadata), range_filter_encoded));
+    } else {
+        set<range> padded_filters = pad_ranges(metadata, range_filter, RANGE_LEFT_PAD, 0);
+        S(encode_range_filters(metadata, padded_filters, range_filter_encoded));
+    }
 
     unique_ptr<bcf_srs_t, void(*)(bcf_srs_t*)> reader(bcf_sr_init(), [](bcf_srs_t* r){ bcf_sr_destroy(r); });
 
